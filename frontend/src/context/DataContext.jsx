@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import useAuth from '../hooks/useAuth';
+import { API_BASE_URL } from '../config/constants';
 
 const DataContext = createContext(null);
 
@@ -114,6 +115,7 @@ const INITIAL_DATA = {
 
 export function DataProvider({ children }) {
   const { user } = useAuth();
+  const [isSyncing, setIsSyncing] = useState(false);
   const [data, setData] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -126,13 +128,72 @@ export function DataProvider({ children }) {
     return INITIAL_DATA;
   });
 
-  useEffect(() => {
+  // Push latest state to central cloud endpoint
+  const pushToCloud = async (updatedData) => {
+    if (!API_BASE_URL) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      await fetch(API_BASE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_data', payload: updatedData })
+      });
     } catch (e) {
-      console.error('Failed to persist data', e);
+      console.error('Failed to push to central cloud', e);
+    }
+  };
+
+  // Pull latest state from central cloud endpoint
+  const syncLiveCloud = useCallback(async () => {
+    if (!API_BASE_URL) return;
+    setIsSyncing(true);
+    try {
+      const res = await fetch(API_BASE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'get_data' })
+      });
+      const result = await res.json();
+      if (result && result.success && result.data && result.data.products) {
+        setData(result.data);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(result.data));
+      } else {
+        // If central script has no data yet, push initial dataset
+        await pushToCloud(data);
+      }
+    } catch (e) {
+      console.error('Failed to sync live cloud data', e);
+    } finally {
+      setIsSyncing(false);
     }
   }, [data]);
+
+  // Initial cloud sync & periodic sync interval (every 15 seconds)
+  useEffect(() => {
+    syncLiveCloud();
+    const interval = setInterval(() => {
+      syncLiveCloud();
+    }, 15000);
+
+    const handleFocus = () => syncLiveCloud();
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('visibilitychange', handleFocus);
+    };
+  }, []);
+
+  // Update state locally & broadcast to cloud
+  const updateDataState = (updater) => {
+    setData(prev => {
+      const nextData = typeof updater === 'function' ? updater(prev) : updater;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextData));
+      pushToCloud(nextData);
+      return nextData;
+    });
+  };
 
   // LEDGER CALCULATION: Sum(IN, ADJUSTMENT_IN, TRANSFER_IN) - Sum(OUT, ADJUSTMENT_OUT, TRANSFER_OUT)
   const getProductStock = (productId, storeId = null) => {
@@ -242,7 +303,7 @@ export function DataProvider({ children }) {
       ip: '103.112.54.' + Math.floor(Math.random() * 50 + 1),
       created_at: new Date().toISOString()
     };
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       auditLogs: [newLog, ...prev.auditLogs]
     }));
@@ -274,7 +335,7 @@ export function DataProvider({ children }) {
       created_at: new Date().toISOString()
     };
 
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       transactions: [newTxn, ...prev.transactions]
     }));
@@ -312,7 +373,7 @@ export function DataProvider({ children }) {
       created_at: new Date().toISOString()
     };
 
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       transactions: [newTxn, ...prev.transactions]
     }));
@@ -356,7 +417,7 @@ export function DataProvider({ children }) {
       completed_at: ''
     };
 
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       transfers: [newTransfer, ...prev.transfers]
     }));
@@ -366,7 +427,7 @@ export function DataProvider({ children }) {
   };
 
   const approveTransfer = (transfer_id) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       transfers: prev.transfers.map(t => {
         if (t.transfer_id === transfer_id) {
@@ -417,7 +478,7 @@ export function DataProvider({ children }) {
       created_at: new Date().toISOString()
     };
 
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       transactions: [txnIn, txnOut, ...prev.transactions],
       transfers: prev.transfers.map(t => {
@@ -436,7 +497,7 @@ export function DataProvider({ children }) {
   };
 
   const cancelTransfer = (transfer_id) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       transfers: prev.transfers.map(t => {
         if (t.transfer_id === transfer_id) {
@@ -490,7 +551,7 @@ export function DataProvider({ children }) {
       };
     }
 
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       products: [newProduct, ...prev.products],
       transactions: initialTxn ? [initialTxn, ...prev.transactions] : prev.transactions
@@ -501,7 +562,7 @@ export function DataProvider({ children }) {
   };
 
   const updateProduct = (product_id, updates) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       products: prev.products.map(p => {
         if (p.product_id === product_id) {
@@ -518,7 +579,7 @@ export function DataProvider({ children }) {
   };
 
   const deactivateProduct = (product_id) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       products: prev.products.map(p => p.product_id === product_id ? { ...p, status: 'INACTIVE' } : p)
     }));
@@ -527,7 +588,7 @@ export function DataProvider({ children }) {
 
   const deleteProductPermanently = (product_id) => {
     const product = data.products.find(p => p.product_id === product_id);
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       products: prev.products.filter(p => p.product_id !== product_id)
     }));
@@ -543,13 +604,13 @@ export function DataProvider({ children }) {
       status: 'ACTIVE',
       created_at: new Date().toISOString()
     };
-    setData(prev => ({ ...prev, categories: [...prev.categories, newCat] }));
+    updateDataState(prev => ({ ...prev, categories: [...prev.categories, newCat] }));
     addAuditLog('CREATE_CATEGORY', 'CATEGORY', newCat.category_id, `Created category "${newCat.category_name}"`);
     return newCat;
   };
 
   const updateCategory = (category_id, updates) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       categories: prev.categories.map(c => c.category_id === category_id ? { ...c, ...updates } : c)
     }));
@@ -566,13 +627,13 @@ export function DataProvider({ children }) {
       status: 'ACTIVE',
       created_at: new Date().toISOString()
     };
-    setData(prev => ({ ...prev, stores: [...prev.stores, newStore] }));
+    updateDataState(prev => ({ ...prev, stores: [...prev.stores, newStore] }));
     addAuditLog('CREATE_STORE', 'STORE', newStore.store_id, `Created store "${newStore.store_name}"`);
     return newStore;
   };
 
   const updateStore = (store_id, updates) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       stores: prev.stores.map(s => s.store_id === store_id ? { ...s, ...updates } : s)
     }));
@@ -592,13 +653,13 @@ export function DataProvider({ children }) {
       status: userData.status || 'ACTIVE',
       created_at: new Date().toISOString()
     };
-    setData(prev => ({ ...prev, users: [...prev.users, newUser] }));
+    updateDataState(prev => ({ ...prev, users: [...prev.users, newUser] }));
     addAuditLog('CREATE_USER', 'USER', newUser.user_id, `Added user ${newUser.name} with role ${newUser.role}`);
     return newUser;
   };
 
   const updateUser = (user_id, updates) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       users: prev.users.map(u => u.user_id === user_id ? { ...u, ...updates } : u)
     }));
@@ -607,7 +668,7 @@ export function DataProvider({ children }) {
 
   const deleteUser = (user_id) => {
     const target = data.users.find(u => u.user_id === user_id);
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       users: prev.users.filter(u => u.user_id !== user_id)
     }));
@@ -625,13 +686,13 @@ export function DataProvider({ children }) {
       status: 'ACTIVE',
       created_at: new Date().toISOString()
     };
-    setData(prev => ({ ...prev, suppliers: [...prev.suppliers, newSupplier] }));
+    updateDataState(prev => ({ ...prev, suppliers: [...prev.suppliers, newSupplier] }));
     addAuditLog('CREATE_SUPPLIER', 'SUPPLIER', newSupplier.supplier_id, `Added supplier "${newSupplier.supplier_name}"`);
     return newSupplier;
   };
 
   const updateSupplier = (supplier_id, updates) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       suppliers: prev.suppliers.map(s => s.supplier_id === supplier_id ? { ...s, ...updates } : s)
     }));
@@ -639,7 +700,7 @@ export function DataProvider({ children }) {
   };
 
   const updateCompany = (updates) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       company: { ...prev.company, ...updates }
     }));
@@ -647,7 +708,7 @@ export function DataProvider({ children }) {
   };
 
   const updateSettings = (updates) => {
-    setData(prev => ({
+    updateDataState(prev => ({
       ...prev,
       settings: { ...prev.settings, ...updates }
     }));
@@ -655,13 +716,14 @@ export function DataProvider({ children }) {
   };
 
   const resetToDemoData = () => {
-    setData(INITIAL_DATA);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_DATA));
+    updateDataState(INITIAL_DATA);
   };
 
   return (
     <DataContext.Provider value={{
       data,
+      isSyncing,
+      syncLiveCloud,
       company: data.company,
       stores: data.stores,
       categories: data.categories,

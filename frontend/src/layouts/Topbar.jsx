@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { Menu, Bell, User, Settings, LogOut, ChevronDown } from 'lucide-react';
+import { Menu, Bell, User, Settings, LogOut, ChevronDown, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import useAuth from '../hooks/useAuth';
+import { useData } from '../context/DataContext';
 
 const Topbar = ({ onMenuClick, pageTitle }) => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const { user, logout } = useAuth();
+  const { isSyncing, syncLiveCloud } = useData();
 
   return (
     <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b border-gray-200 bg-white px-4 sm:px-6">
@@ -19,7 +21,18 @@ const Topbar = ({ onMenuClick, pageTitle }) => {
         <h1 className="text-xl font-semibold text-gray-900">{pageTitle || 'StoreIQ SaaS'}</h1>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
+        {/* Sync Live Cloud Data Button */}
+        <button
+          onClick={syncLiveCloud}
+          disabled={isSyncing}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50 hover:text-blue-600 transition-colors disabled:opacity-50"
+          title="Sync live data across all devices"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline">{isSyncing ? 'Syncing...' : 'Sync Live Data'}</span>
+        </button>
+
         <div className="relative">
           <button
             onClick={() => setIsProfileOpen(!isProfileOpen)}

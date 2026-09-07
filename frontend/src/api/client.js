@@ -22,7 +22,7 @@ export async function apiCall(action, payload = {}) {
               return reject(new Error('ইমেইল এবং পাসওয়ার্ড উভয়ই প্রয়োজন (Email and password are required)'));
             }
 
-            // Look up in persisted DataContext store first, then fallback to defaults
+            // Read the latest persisted users from local storage
             let currentUsers = defaultUsers;
             try {
               const saved = localStorage.getItem('storeiq_saas_data_v1');
@@ -47,9 +47,9 @@ export async function apiCall(action, payload = {}) {
               return reject(new Error('এই অ্যাকাউন্টটি নিষ্ক্রিয় (Inactive) করা আছে। অ্যাডমিনের সাথে যোগাযোগ করুন।'));
             }
 
-            // In demo mode, standard password is demo123 (or user.password if set)
+            // Strict password check: MUST match user's current password exactly
             const expectedPassword = user.password || 'demo123';
-            if (password !== expectedPassword && password !== 'demo123') {
+            if (password !== expectedPassword) {
               return reject(new Error('ভুল পাসওয়ার্ড! অনুগ্রহ করে সঠিক পাসওয়ার্ড দিন। (Incorrect password)'));
             }
 
